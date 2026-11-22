@@ -100,7 +100,7 @@ class MainActivity : AppCompatActivity() {
         input = EditText(this).apply {
             hint = "Search in English / Telugu, voter ID, house no."
             textSize = 15f
-            singleLine = true
+            setSingleLine(true)
             inputType = InputType.TYPE_CLASS_TEXT
             imeOptions = EditorInfo.IME_ACTION_SEARCH
             setPadding(dp(14), dp(10), dp(14), dp(10))
