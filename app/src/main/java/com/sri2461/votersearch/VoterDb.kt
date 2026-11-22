@@ -4,10 +4,11 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import java.util.Locale
 
 class SearchResult(val total: Int, val rows: List<Voter>)
 
-class VoterDb(context: Context) : SQLiteOpenHelper(context, "voters.db", null, 2) {
+class VoterDb(context: Context) : SQLiteOpenHelper(context, "voters.db", null, 4) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -15,15 +16,48 @@ class VoterDb(context: Context) : SQLiteOpenHelper(context, "voters.db", null, 2
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 "ward INTEGER NOT NULL, sno INTEGER NOT NULL, " +
                 "name TEXT, name_en TEXT, relation TEXT, rel_name TEXT, rel_name_en TEXT, " +
-                "age TEXT, gender TEXT, house TEXT, epic TEXT, area TEXT, search TEXT NOT NULL)"
+                "age TEXT, gender TEXT, house TEXT, epic TEXT, area TEXT, search TEXT NOT NULL, name_key TEXT NOT NULL DEFAULT '')"
         )
         db.execSQL("CREATE INDEX voters_ward_idx ON voters(ward, sno)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Version 1 was the old PDF/OCR schema; it is replaced entirely.
-        db.execSQL("DROP TABLE IF EXISTS voters")
-        onCreate(db)
+        if (oldVersion < 2) {
+            // Version 1 was the old PDF/OCR schema; replace it with the CSV/XLSX schema.
+            db.execSQL("DROP TABLE IF EXISTS voters")
+            onCreate(db)
+            return
+        }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE voters ADD COLUMN name_key TEXT NOT NULL DEFAULT ''")
+            // Preserve the currently imported voter list while adding phonetic-name keys.
+            val existingNames = ArrayList<Triple<Long, String, String>>()
+            db.rawQuery("SELECT id, name, name_en FROM voters", null).use { c ->
+                while (c.moveToNext()) {
+                    existingNames.add(Triple(c.getLong(0), c.getString(1).orEmpty(), c.getString(2).orEmpty()))
+                }
+            }
+            for ((id, name, nameEn) in existingNames) {
+                val key = listOf(nameEn, name).filter { it.isNotBlank() }
+                    .joinToString(" ") { normalizeNameForMatch(it) }
+                val values = ContentValues().apply { put("name_key", key) }
+                db.update("voters", values, "id = ?", arrayOf(id.toString()))
+            }
+        }
+        if (oldVersion < 4) {
+            // Rebuild existing search keys with expanded phonetic normalization.
+            val existingNames = ArrayList<Triple<Long, String, String>>()
+            db.rawQuery("SELECT id, name, name_en FROM voters", null).use { c ->
+                while (c.moveToNext()) {
+                    existingNames.add(Triple(c.getLong(0), c.getString(1).orEmpty(), c.getString(2).orEmpty()))
+                }
+            }
+            for ((id, name, nameEn) in existingNames) {
+                val key = listOf(nameEn, name).filter { it.isNotBlank() }
+                    .joinToString(" ") { normalizeNameForMatch(it) }
+                db.update("voters", ContentValues().apply { put("name_key", key) }, "id = ?", arrayOf(id.toString()))
+            }
+        }
     }
 
     fun count(): Int =
@@ -41,6 +75,22 @@ class VoterDb(context: Context) : SQLiteOpenHelper(context, "voters.db", null, 2
         return out
     }
 
+    fun genders(): List<String> {
+        val out = ArrayList<String>()
+        readableDatabase.rawQuery("SELECT DISTINCT gender FROM voters WHERE TRIM(gender) <> '' ORDER BY gender", null).use {
+            while (it.moveToNext()) out.add(it.getString(0).orEmpty())
+        }
+        return out
+    }
+
+    fun areas(): List<String> {
+        val out = ArrayList<String>()
+        readableDatabase.rawQuery("SELECT DISTINCT area FROM voters WHERE TRIM(area) <> '' ORDER BY area", null).use {
+            while (it.moveToNext()) out.add(it.getString(0).orEmpty())
+        }
+        return out
+    }
+
     fun replaceAll(voters: List<Voter>) {
         val db = writableDatabase
         db.beginTransaction()
@@ -49,7 +99,7 @@ class VoterDb(context: Context) : SQLiteOpenHelper(context, "voters.db", null, 2
             for (v in voters) {
                 val searchText = listOf(
                     v.name, v.nameEn, v.relName, v.relNameEn, v.house, v.epic, v.sno.toString()
-                ).joinToString(" ").lowercase()
+                ).joinToString(" ").lowercase(Locale.ROOT)
                 val values = ContentValues().apply {
                     put("ward", v.ward)
                     put("sno", v.sno)
@@ -64,6 +114,8 @@ class VoterDb(context: Context) : SQLiteOpenHelper(context, "voters.db", null, 2
                     put("epic", v.epic)
                     put("area", v.area)
                     put("search", searchText)
+                    put("name_key", listOf(v.nameEn, v.name).filter { it.isNotBlank() }
+                        .joinToString(" ") { normalizeNameForMatch(it) })
                 }
                 check(db.insert("voters", null, values) != -1L) { "Could not save row ${v.sno}" }
             }
@@ -74,18 +126,44 @@ class VoterDb(context: Context) : SQLiteOpenHelper(context, "voters.db", null, 2
     }
 
     /** Every word typed must appear somewhere in the voter's searchable text. */
-    fun search(query: String, ward: Int?, limit: Int): SearchResult {
-        val tokens = query.lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    fun search(query: String, ward: Int?, limit: Int, initial: String? = null, area: String? = null, gender: String? = null, ageGroup: String? = null): SearchResult {
+        // Search both ordinary text (IDs/house numbers/etc.) and canonicalized
+        // voter-name keys (spaces and common Roman spelling variants ignored).
+        val compactQuery = query.lowercase(Locale.ROOT).filterNot { it.isWhitespace() }
+        val nameQuery = normalizeNameForMatch(query)
         val where = ArrayList<String>()
         val args = ArrayList<String>()
-        for (t in tokens) {
-            where.add("search LIKE ? ESCAPE '\\'")
-            val escaped = t.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        if (compactQuery.isNotEmpty()) {
+            val escaped = compactQuery.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            where.add("REPLACE(LOWER(search), ' ', '') LIKE ? ESCAPE '\\'")
             args.add("%$escaped%")
+            if (nameQuery.isNotEmpty()) {
+                val nameEscaped = nameQuery.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                where[where.lastIndex] = "(" + where.last() + " OR name_key LIKE ? ESCAPE '\\')"
+                args.add("%$nameEscaped%")
+            }
         }
         if (ward != null) {
             where.add("ward = ?")
             args.add(ward.toString())
+        }
+        if (!initial.isNullOrBlank()) {
+            where.add("UPPER(name_en) LIKE ?")
+            args.add(initial.uppercase(Locale.ROOT) + "%")
+        }
+        if (!area.isNullOrBlank()) {
+            where.add("area = ?")
+            args.add(area)
+        }
+        if (!gender.isNullOrBlank()) {
+            where.add("gender = ?")
+            args.add(gender)
+        }
+        when (ageGroup) {
+            "18–25" -> where.add("CAST(age AS INTEGER) BETWEEN 18 AND 25")
+            "26–40" -> where.add("CAST(age AS INTEGER) BETWEEN 26 AND 40")
+            "41–60" -> where.add("CAST(age AS INTEGER) BETWEEN 41 AND 60")
+            "60+" -> where.add("CAST(age AS INTEGER) > 60")
         }
         val clause = if (where.isEmpty()) "" else " WHERE " + where.joinToString(" AND ")
         val argArray = args.toTypedArray()

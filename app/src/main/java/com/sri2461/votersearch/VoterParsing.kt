@@ -121,11 +121,37 @@ fun findHeaderRow(rows: List<List<String>>): Int =
 /** One voter that shares a name with at least one other voter. */
 data class DupRow(val group: Int, val count: Int, val voter: Voter)
 
+/**
+ * Phonetic search key for common Indian-name Roman transliteration differences.
+ * It deliberately folds common alternate spellings while retaining most name
+ * sounds; duplicate groups are suggestions and should still be manually checked.
+ */
+fun normalizeNameForMatch(value: String): String {
+    var key = value.lowercase().filter { it.isLetterOrDigit() }
+
+    // Common alternate spellings/prefixes used in Indian names.
+    key = key.replace("shree", "sri").replace("shri", "sri").replace("sree", "sri")
+    key = key.replace("ksh", "x")
+    key = key.replace("sh", "s")
+
+    // Roman transliteration alternatives often used for the same Indian sound.
+    key = key.replace("ph", "f").replace("th", "t").replace("dh", "d")
+        .replace("bh", "b").replace("kh", "k").replace("gh", "g")
+        .replace("w", "v").replace("x", "ksh")
+
+    // Long/short vowel spellings and repeated consonants.
+    key = key.replace("aa", "a").replace("ee", "i").replace("ii", "i")
+        .replace("oo", "u").replace("uu", "u")
+    key = key.replace(Regex("([bcdfghjklmnpqrstvwxyz])\\1+"), "$1")
+    return key
+}
+
 private fun nameKey(v: Voter): String =
-    v.nameEn.ifBlank { v.name }.trim().lowercase().replace(Regex("\\s+"), " ")
+    normalizeNameForMatch(v.nameEn.ifBlank { v.name })
 
 /**
- * Groups voters whose names match (English spelling, ignoring case and extra spaces;
+ * Groups voters whose names match after case/space/punctuation removal and common
+ * Roman transliteration normalization (for example, Sri/Shri and long vowels;
  * Telugu name is used if there is no English one). Only groups of 2+ are returned,
  * numbered alphabetically, members ordered by ward and serial number.
  */
