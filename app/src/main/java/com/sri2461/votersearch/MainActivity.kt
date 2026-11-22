@@ -80,22 +80,22 @@ class MainActivity : AppCompatActivity() {
 
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(16), dp(18), dp(16))
+            setPadding(dp(14), dp(9), dp(14), dp(9))
             background = rounded(0xFF174A8B.toInt(), 18)
         }
         header.addView(TextView(this).apply {
             text = "Voter Directory"
-            textSize = 25f
+            textSize = 21f
             setTextColor(Color.WHITE)
             setTypeface(typeface, Typeface.BOLD)
         })
         header.addView(TextView(this).apply {
             text = "Search voters quickly by name, ID or house number"
-            textSize = 13f
+            textSize = 11f
             setTextColor(0xFFE1ECFA.toInt())
-            setPadding(0, dp(4), 0, 0)
+            setPadding(0, dp(2), 0, 0)
         })
-        root.addView(header, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+        root.addView(header, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(7) })
 
         input = EditText(this).apply {
             hint = "Search in English / Telugu, voter ID, house no."
@@ -103,7 +103,7 @@ class MainActivity : AppCompatActivity() {
             setSingleLine(true)
             inputType = InputType.TYPE_CLASS_TEXT
             imeOptions = EditorInfo.IME_ACTION_SEARCH
-            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setPadding(dp(12), dp(7), dp(12), dp(7))
             background = rounded(Color.WHITE, 14, 0xFFDCE4EF.toInt())
             setOnEditorActionListener { _, actionId, _ ->
                 if (actionId == EditorInfo.IME_ACTION_SEARCH) { search(); true } else false
@@ -113,31 +113,36 @@ class MainActivity : AppCompatActivity() {
                 handler.postDelayed(runSearch, 300)
             }
         }
-        root.addView(input, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(9) })
+        val searchRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        searchRow.addView(input, LinearLayout.LayoutParams(0, dp(44), 1f).apply { rightMargin = dp(6) })
+        searchRow.addView(actionButton("Search", 0xFF1769AA.toInt()) { search() },
+            LinearLayout.LayoutParams(dp(82), dp(44)))
+        root.addView(searchRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
 
         val filterRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         wardSpinner = Spinner(this).apply { background = rounded(Color.WHITE, 12, 0xFFDCE4EF.toInt()) }
         areaSpinner = Spinner(this).apply { background = rounded(Color.WHITE, 12, 0xFFDCE4EF.toInt()) }
-        filterRow.addView(wardSpinner, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(6) })
-        filterRow.addView(areaSpinner, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
-        root.addView(filterRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(7) })
+        filterRow.addView(wardSpinner, LinearLayout.LayoutParams(0, dp(38), 1f).apply { rightMargin = dp(6) })
+        filterRow.addView(areaSpinner, LinearLayout.LayoutParams(0, dp(38), 1f).apply { leftMargin = dp(6) })
+        root.addView(filterRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) })
 
         val extraFilterRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         genderSpinner = Spinner(this).apply { background = rounded(Color.WHITE, 12, 0xFFDCE4EF.toInt()) }
         ageSpinner = Spinner(this).apply { background = rounded(Color.WHITE, 12, 0xFFDCE4EF.toInt()) }
-        extraFilterRow.addView(genderSpinner, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(6) })
-        extraFilterRow.addView(ageSpinner, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(6) })
-        root.addView(extraFilterRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(7) })
-        root.addView(actionButton("Search voters", 0xFF1769AA.toInt()) { search() },
-            LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(8) })
+        extraFilterRow.addView(genderSpinner, LinearLayout.LayoutParams(0, dp(38), 1f).apply { rightMargin = dp(6) })
+        extraFilterRow.addView(ageSpinner, LinearLayout.LayoutParams(0, dp(38), 1f).apply { leftMargin = dp(6) })
+        root.addView(extraFilterRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(5) })
 
         root.addView(TextView(this).apply {
             text = "QUICK JUMP · ENGLISH NAME"
-            textSize = 11f
-            letterSpacing = 0.08f
+            textSize = 10f
+            letterSpacing = 0.06f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(0xFF64748B.toInt())
-            setPadding(dp(2), dp(3), 0, dp(5))
+            setPadding(dp(2), 0, 0, dp(3))
         })
         val alphabetScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -146,7 +151,7 @@ class MainActivity : AppCompatActivity() {
         alphabetBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         alphabetScroll.addView(alphabetBar)
         buildAlphabet()
-        root.addView(alphabetScroll, LinearLayout.LayoutParams(-1, dp(43)).apply { bottomMargin = dp(6) })
+        root.addView(alphabetScroll, LinearLayout.LayoutParams(-1, dp(35)).apply { bottomMargin = dp(3) })
 
         status = TextView(this).apply {
             textSize = 13f
@@ -209,14 +214,14 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(if (selected) Color.WHITE else 0xFF31516F.toInt())
                 background = rounded(if (selected) 0xFF1769AA.toInt() else Color.WHITE, 9,
                     if (selected) null else 0xFFE0E7EF.toInt())
-                setPadding(dp(11), dp(7), dp(11), dp(7))
+                setPadding(dp(9), dp(5), dp(9), dp(5))
                 setOnClickListener {
                     alphabetLetter = if (letter == "All") null else letter
                     buildAlphabet()
                     search()
                 }
             }
-            alphabetBar.addView(chip, LinearLayout.LayoutParams(-2, dp(34)).apply { rightMargin = dp(5) })
+            alphabetBar.addView(chip, LinearLayout.LayoutParams(-2, dp(29)).apply { rightMargin = dp(4) })
         }
     }
 
