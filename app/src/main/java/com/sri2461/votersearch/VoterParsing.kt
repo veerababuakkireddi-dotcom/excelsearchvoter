@@ -118,53 +118,193 @@ fun findHeaderRow(rows: List<List<String>>): Int =
             r.any { it.trim().equals("Name", ignoreCase = true) }
     }
 
-/** One voter that shares a name with at least one other voter. */
-data class DupRow(val group: Int, val count: Int, val voter: Voter)
+/** One voter that belongs to a possible duplicate group. */
+data class DupRow(
+    val group: Int,
+    val count: Int,
+    val voter: Voter,
+    val matchReason: String = "Similar name"
+)
 
 /**
- * Phonetic search key for common Indian-name Roman transliteration differences.
- * It deliberately folds common alternate spellings while retaining most name
- * sounds; duplicate groups are suggestions and should still be manually checked.
+ * Canonical key for common Indian-English transliteration differences.
+ * Spaces and punctuation are removed so joined/split names compare equally.
  */
 fun normalizeNameForMatch(value: String): String {
     var key = value.lowercase().filter { it.isLetterOrDigit() }
-
-    // Common alternate spellings/prefixes used in Indian names.
     key = key.replace("shree", "sri").replace("shri", "sri").replace("sree", "sri")
-    key = key.replace("ksh", "x")
-    key = key.replace("sh", "s")
-
-    // Roman transliteration alternatives often used for the same Indian sound.
+    key = key.replace("ksh", "x").replace("sh", "s")
     key = key.replace("ph", "f").replace("th", "t").replace("dh", "d")
         .replace("bh", "b").replace("kh", "k").replace("gh", "g")
-        .replace("w", "v").replace("x", "ksh")
-
-    // Long/short vowel spellings and repeated consonants.
+        .replace("w", "v").replace("z", "j")
     key = key.replace("aa", "a").replace("ee", "i").replace("ii", "i")
         .replace("oo", "u").replace("uu", "u")
     key = key.replace(Regex("([bcdfghjklmnpqrstvwxyz])\\1+"), "$1")
     return key
 }
 
-private fun nameKey(v: Voter): String =
+private fun voterNameKey(v: Voter): String =
     normalizeNameForMatch(v.nameEn.ifBlank { v.name })
 
+private fun relationNameKey(v: Voter): String =
+    normalizeNameForMatch(v.relNameEn.ifBlank { v.relName })
+
+private fun compactHouse(value: String): String =
+    value.uppercase().filter { it.isLetterOrDigit() }
+
+private fun compactAge(value: String): String =
+    value.filter { it.isDigit() }
+
+private fun editSimilarity(a: String, b: String): Double {
+    if (a == b) return 1.0
+    if (a.isEmpty() || b.isEmpty()) return 0.0
+    if (kotlin.math.abs(a.length - b.length) > maxOf(a.length, b.length) / 2) return 0.0
+    var previous = IntArray(b.length + 1) { it }
+    var current = IntArray(b.length + 1)
+    for (i in a.indices) {
+        current[0] = i + 1
+        for (j in b.indices) {
+            val cost = if (a[i] == b[j]) 0 else 1
+            current[j + 1] = minOf(
+                current[j] + 1,
+                previous[j + 1] + 1,
+                previous[j] + cost
+            )
+        }
+        val swap = previous
+        previous = current
+        current = swap
+    }
+    return 1.0 - previous[b.length].toDouble() / maxOf(a.length, b.length)
+}
+
+/** Compare both full transliteration and consonant sound pattern. */
+private fun phoneticSimilarity(a: String, b: String): Double {
+    if (a.isBlank() || b.isBlank()) return 0.0
+    val ca = normalizeNameForMatch(a)
+    val cb = normalizeNameForMatch(b)
+    val consonantsA = ca.filterNot { it in "aeiou" }
+    val consonantsB = cb.filterNot { it in "aeiou" }
+    return maxOf(editSimilarity(ca, cb), editSimilarity(consonantsA, consonantsB))
+}
+
+private data class PairMatch(val left: Int, val right: Int, val reason: String, val strength: Int)
+
 /**
- * Groups voters whose names match after case/space/punctuation removal and common
- * Roman transliteration normalization (for example, Sri/Shri and long vowels;
- * Telugu name is used if there is no English one). Only groups of 2+ are returned,
- * numbered alphabetically, members ordered by ward and serial number.
+ * Find duplicate candidates using several independent clues instead of exact name keys only.
+ * A fuzzy name match is accepted when supported by the same age+house or a similar
+ * father/husband name. Strongly similar names can also match without those fields.
+ * Results are review suggestions, not automatic voter-record merges.
  */
 fun findDuplicates(voters: List<Voter>): List<DupRow> {
-    val groups = voters.filter { nameKey(it).isNotEmpty() }
-        .groupBy { nameKey(it) }
-        .filter { it.value.size > 1 }
-    val out = ArrayList<DupRow>()
-    var number = 0
-    for (key in groups.keys.sorted()) {
-        number++
-        val members = groups.getValue(key).sortedWith(compareBy({ it.ward }, { it.sno }))
-        members.forEach { out.add(DupRow(number, members.size, it)) }
+    val usable = voters.indices.filter { voterNameKey(voters[it]).isNotBlank() }
+    if (usable.size < 2) return emptyList()
+
+    // Candidate blocking avoids comparing every voter with every other voter.
+    val buckets = HashMap<String, MutableList<Int>>()
+    fun addBucket(key: String, index: Int) {
+        if (key.isNotBlank()) buckets.getOrPut(key) { ArrayList() }.add(index)
     }
-    return out
+    for (i in usable) {
+        val v = voters[i]
+        val name = voterNameKey(v)
+        val relation = relationNameKey(v)
+        val consonantBlock = name.filterNot { it in "aeiou" }.take(5)
+        val house = compactHouse(v.house)
+        val age = compactAge(v.age)
+        val relationBlock = relation.filterNot { it in "aeiou" }.take(5)
+        addBucket("N:$name", i)
+        addBucket("P:$consonantBlock", i)
+        if (house.isNotBlank() && age.isNotBlank()) addBucket("H:$house:$age", i)
+        if (relation.isNotBlank()) {
+            addBucket("R:$relation", i)
+            addBucket("RP:$relationBlock", i)
+        }
+    }
+
+    val candidatePairs = HashSet<Long>()
+    for (members in buckets.values) {
+        if (members.size < 2) continue
+        for (a in 0 until members.size) for (b in a + 1 until members.size) {
+            val x = minOf(members[a], members[b])
+            val y = maxOf(members[a], members[b])
+            candidatePairs.add((x.toLong() shl 32) or (y.toLong() and 0xffffffffL))
+        }
+    }
+
+    val matches = ArrayList<PairMatch>()
+    for (pair in candidatePairs) {
+        val i = (pair ushr 32).toInt()
+        val j = pair.toInt()
+        val a = voters[i]
+        val b = voters[j]
+        val nameA = voterNameKey(a)
+        val nameB = voterNameKey(b)
+        val nameScore = phoneticSimilarity(nameA, nameB)
+        val sameHouse = compactHouse(a.house).isNotBlank() &&
+            compactHouse(a.house) == compactHouse(b.house)
+        val sameAge = compactAge(a.age).isNotBlank() && compactAge(a.age) == compactAge(b.age)
+        val relationScore = phoneticSimilarity(relationNameKey(a), relationNameKey(b))
+        val genderA = a.gender.trim().lowercase()
+        val genderB = b.gender.trim().lowercase()
+        val genderConflict = genderA.isNotBlank() && genderB.isNotBlank() && genderA != genderB
+
+        val exactName = nameA == nameB
+        val sameHouseAge = sameHouse && sameAge
+        val nameStrong = nameScore >= 0.88
+        val nameWithHouse = nameScore >= 0.70 && sameHouseAge
+        val nameWithRelation = nameScore >= 0.68 && relationScore >= 0.78
+        val nameWithAllClues = nameScore >= 0.62 && sameHouseAge && relationScore >= 0.68
+
+        if (genderConflict && !exactName) continue
+        val reason: String
+        val strength: Int
+        when {
+            exactName -> { reason = "Same phonetic name"; strength = 5 }
+            nameWithAllClues -> { reason = "Name + age + house + relative"; strength = 5 }
+            nameWithHouse && relationScore >= 0.55 -> { reason = "Name + age + house"; strength = 4 }
+            nameWithRelation -> { reason = "Name + father/husband name"; strength = 4 }
+            nameWithHouse -> { reason = "Name + age + house"; strength = 3 }
+            nameStrong -> { reason = "Very similar name"; strength = 3 }
+            else -> continue
+        }
+        matches.add(PairMatch(i, j, reason, strength))
+    }
+
+    if (matches.isEmpty()) return emptyList()
+
+    // Connected components form review groups. Keep the strongest explanation per group.
+    val parent = IntArray(voters.size) { it }
+    fun root(value: Int): Int {
+        var x = value
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        }
+        return x
+    }
+    fun union(a: Int, b: Int) {
+        val ra = root(a)
+        val rb = root(b)
+        if (ra != rb) parent[rb] = ra
+    }
+    matches.forEach { union(it.left, it.right) }
+
+    val grouped = matches.groupBy { root(it.left) }
+    val output = ArrayList<DupRow>()
+    var groupNo = 0
+    for ((_, edges) in grouped.entries.sortedBy { entry ->
+        entry.value.minOf { minOf(voters[it.left].ward, voters[it.right].ward) } * 100000L +
+            entry.value.minOf { minOf(voters[it.left].sno, voters[it.right].sno) }
+    }) {
+        val memberIds = edges.flatMap { listOf(it.left, it.right) }.distinct()
+        if (memberIds.size < 2) continue
+        groupNo++
+        val count = memberIds.size
+        val explanation = edges.maxByOrNull { it.strength }?.reason ?: "Similar name"
+        memberIds.map { voters[it] }
+            .sortedWith(compareBy({ it.ward }, { it.sno }))
+            .forEach { output.add(DupRow(groupNo, count, it, explanation)) }
+    }
+    return output
 }

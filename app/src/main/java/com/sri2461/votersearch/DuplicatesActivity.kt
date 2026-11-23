@@ -33,6 +33,7 @@ class DuplicatesActivity : AppCompatActivity() {
     private val cols = listOf(
         Col("Group", 64, true) { it.group.toString() },
         Col("Count", 64, true) { it.count.toString() },
+        Col("Match basis", 190, false) { it.matchReason },
         Col("Name (English)", 170, false) { it.voter.nameEn },
         Col("Father/Husband Name", 190, false) { it.voter.relNameEn.ifBlank { it.voter.relName } },
         Col("Name (Telugu)", 170, false) { it.voter.name },
@@ -310,8 +311,8 @@ class DuplicatesActivity : AppCompatActivity() {
                     line.addView(TextView(this).apply {
                         text = value.ifBlank { "—" }
                         textSize = 12.5f
-                        setTextColor(if (columnIndex == 2) Color.rgb(28, 74, 125) else Color.rgb(47, 59, 74))
-                        if (columnIndex == 2) setTypeface(typeface, Typeface.BOLD)
+                        setTextColor(if (columnIndex == 3) Color.rgb(28, 74, 125) else Color.rgb(47, 59, 74))
+                        if (columnIndex == 3) setTypeface(typeface, Typeface.BOLD)
                         setPadding(dp(7), dp(10), dp(7), dp(10))
                         gravity = Gravity.CENTER_VERTICAL
                     }, LinearLayout.LayoutParams(dp(c.widthDp), -2))
